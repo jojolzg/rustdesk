@@ -289,7 +289,10 @@ void runConnectionManagerScreen() async {
     const DesktopServerPage(),
     MyTheme.currentThemeMode(),
   );
-  final hide = await bind.cmGetConfig(name: "hide_cm") == 'true';
+  // Always start the connection manager window hidden so incoming sessions
+  // (e.g. TCP tunnel/port-forward) never pop the window. Controlled side is
+  // expected to authorize via permanent password; the cm window is cosmetic.
+  final hide = true;
   gFFI.serverModel.hideCm = hide;
   if (hide) {
     await hideCmWindow(isStartup: true);

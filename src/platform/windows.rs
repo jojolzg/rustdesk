@@ -1354,6 +1354,10 @@ pub fn get_install_options() -> String {
     serde_json::to_string(&opts).unwrap_or("{}".to_owned())
 }
 
+/// 静默安装参数：默认不建桌面/开始菜单快捷方式（laztool 宿主托管模式）。
+///
+/// 入口只有桌面助手一个，装出两个快捷方式等于把「这是个内置组件」的事说破。
+/// 想恢复上游行为，在 custom client 配置里加 `install-shortcuts=Y`。
 pub fn get_silent_install_options(printer_override: Option<bool>) -> &'static str {
     let install_printer = match printer_override {
         Some(override_value) => override_value,
@@ -1364,10 +1368,13 @@ pub fn get_silent_install_options(printer_override: Option<bool>) -> &'static st
             printer.as_deref() == Some("1")
         }
     };
-    if install_printer && is_win_10_or_greater() {
-        "desktopicon startmenu printer"
-    } else {
-        "desktopicon startmenu"
+    let want_shortcuts = crate::get_builtin_option("install-shortcuts") == "Y";
+    let want_printer = install_printer && is_win_10_or_greater();
+    match (want_shortcuts, want_printer) {
+        (true, true) => "desktopicon startmenu printer",
+        (true, false) => "desktopicon startmenu",
+        (false, true) => "printer",
+        (false, false) => "",
     }
 }
 

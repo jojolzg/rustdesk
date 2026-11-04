@@ -1,9 +1,8 @@
 name: Flutter Nightly Build
 
 on:
-  schedule:
-    # schedule build every night
-    - cron: "0 0 * * *"
+  # laztool：只保留手动触发。每晚一次全量 Windows 构建对定制分支没有价值，
+  # 真要回归就走 flutter-tag.yml 打 tag。恢复定时构建把这行 schedule 加回来即可。
   workflow_dispatch:
 
 jobs:

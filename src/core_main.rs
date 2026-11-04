@@ -475,6 +475,11 @@ pub fn core_main() -> Option<Vec<String>> {
         } else if args[0] == "--get-id" {
             println!("{}", crate::ipc::get_id());
             return None;
+        } else if args[0] == "--get-temp-password" {
+            // laztool：宿主读取被控端临时密码的唯一入口（CM 窗口常隐，
+            // 客户界面上看不到密码）。不加 --set 之类写操作，纯只读。
+            println!("{}", crate::ipc::get_temporary_password());
+            return None;
         } else if args[0] == "--set-id" {
             if is_cli_setting_change_disabled() {
                 println!("Settings are disabled!");
@@ -879,6 +884,7 @@ fn is_user_main_ipc_scope_cli_command(args: &[String]) -> bool {
         Some("--password")
             | Some("--set-unlock-pin")
             | Some("--get-id")
+            | Some("--get-temp-password")
             | Some("--set-id")
             | Some("--config")
             | Some("--option")
@@ -926,6 +932,7 @@ mod tests {
             "--password",
             "--set-unlock-pin",
             "--get-id",
+            "--get-temp-password",
             "--set-id",
             "--config",
             "--option",

@@ -1815,6 +1815,23 @@ pub fn get_id() -> String {
     Config::get_id()
 }
 
+/// 读取本机临时密码（由 RustDesk 服务端进程持有）。
+///
+/// 宿主通过 `rustdesk.exe --get-temp-password` 调用：被控端 CM 窗口常隐，
+/// 客户看不到密码，必须由宿主的「远程协助」面板展示，所以这一路径要
+/// 既不弹窗也不依赖 GUI 进程。
+///
+/// IPC 不可用（未安装 / 服务未启动）时回退到进程内生成值，
+/// 保证命令永远有输出，宿主不必区分两种失败态。
+pub fn get_temporary_password() -> String {
+    if let Ok(Some(v)) = get_config("temporary-password") {
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    crate::ui_interface::temporary_password()
+}
+
 pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>) {
     if let Ok(Some(v)) = get_config_async("rendezvous_server", ms_timeout).await {
         let mut urls = v.split(",");

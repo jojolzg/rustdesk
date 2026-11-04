@@ -2141,7 +2141,30 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
     ThrottledInterval::new(i)
 }
 
+/// laztool 定制：宿主托管模式（景智桌面助手）的默认内置选项。
+///
+/// 由 [`load_custom_client`] 在启动最早阶段调用，flutter / service / core_main
+/// 三个入口都经过那条路径，因此不需要在每个入口各改一次。
+///
+/// 语义是「不覆盖」：`entry().or_insert()` 只填空缺，运维若通过 custom client
+/// 下发同名键（或调试时手工塞值）仍然优先，回退路径永远可用。
+///
+/// - `hide-tray`：宿主是唯一入口，两个托盘图标会立刻暴露第三方组件。
+/// - `enable-check-update` / `allow-auto-update`：更新由宿主统一分发，
+///   组件自更新会绕过分发链路并可能把定制版本覆盖成上游版本。
+pub fn apply_laztool_defaults() {
+    let mut settings = config::BUILTIN_SETTINGS.write().unwrap();
+    for (k, v) in [
+        (keys::OPTION_HIDE_TRAY, "Y"),
+        (keys::OPTION_ENABLE_CHECK_UPDATE, "N"),
+        (keys::OPTION_ALLOW_AUTO_UPDATE, "N"),
+    ] {
+        settings.entry(k.to_owned()).or_insert_with(|| v.to_owned());
+    }
+}
+
 pub fn load_custom_client() {
+    apply_laztool_defaults();
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());

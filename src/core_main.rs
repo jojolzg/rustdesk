@@ -475,6 +475,19 @@ pub fn core_main() -> Option<Vec<String>> {
         } else if args[0] == "--get-id" {
             println!("{}", crate::ipc::get_id());
             return None;
+        } else if args[0] == "--kill-sessions" {
+            // laztool：客户机侧「一键断开」。只断画面/摄像头会话，
+            // 不停服务——断了还能再连，符合「可被协助但可随时中止」的产品语义。
+            match crate::ipc::kill_sessions() {
+                Ok(n) => println!("{n}"),
+                Err(e) => {
+                    // -1 = IPC 不通（组件没跑/权限不够），与「没有会话」区分开：
+                    // 宿主据此给不同文案，否则用户会以为「明明有人在看，却说没有会话」
+                    log::warn!("[kill-sessions] {e}");
+                    println!("-1");
+                }
+            }
+            return None;
         } else if args[0] == "--get-temp-password" {
             // laztool：宿主读取被控端临时密码的唯一入口（CM 窗口常隐，
             // 客户界面上看不到密码）。不加 --set 之类写操作，纯只读。
@@ -885,6 +898,7 @@ fn is_user_main_ipc_scope_cli_command(args: &[String]) -> bool {
             | Some("--set-unlock-pin")
             | Some("--get-id")
             | Some("--get-temp-password")
+            | Some("--kill-sessions")
             | Some("--set-id")
             | Some("--config")
             | Some("--option")
@@ -933,6 +947,7 @@ mod tests {
             "--set-unlock-pin",
             "--get-id",
             "--get-temp-password",
+            "--kill-sessions",
             "--set-id",
             "--config",
             "--option",

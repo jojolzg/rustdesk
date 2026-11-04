@@ -359,6 +359,11 @@ pub enum Data {
     UserSid(Option<u32>),
     OnlineStatus(Option<(i64, bool)>),
     Config((String, Option<String>)),
+    /// 断开所有入站远程画面会话。
+    ///
+    /// `None` = 请求（宿主 `--kill-sessions`），`Some(n)` = 已下发断开指令的连接数。
+    /// 只断画面/摄像头，文件传输与端口转发不在「有人看我屏幕」语义内。
+    KillSessions(Option<u32>),
     Options(Option<HashMap<String, String>>),
     NatType(Option<i32>),
     ConfirmedKey(Option<(Vec<u8>, Vec<u8>)>),
@@ -900,6 +905,11 @@ async fn handle(data: Data, stream: &mut Connection) {
                 .count();
             allow_err!(stream.send(&Data::VideoConnCount(Some(n))).await);
         }
+        Data::KillSessions(None) => {
+            let n = crate::server::kill_remote_sessions();
+            allow_err!(stream.send(&Data::KillSessions(Some(n as u32))).await);
+        }
+        Data::KillSessions(Some(_)) => {}
         Data::Config((name, value)) => match value {
             None => {
                 let value;
@@ -1813,6 +1823,20 @@ pub fn get_id() -> String {
         }
     }
     Config::get_id()
+}
+
+/// 断开所有入站远程画面会话（供 `--kill-sessions` 使用）。
+///
+/// 用 `#[tokio::main]` 把异步 IPC 封成阻塞调用，和 `get_config` 同款写法——
+/// CLI 入口是同步的，没必要为此引一个运行时。
+#[tokio::main(flavor = "current_thread")]
+pub async fn kill_sessions() -> ResultType<usize> {
+    let mut c = connect(1_000, "").await?;
+    c.send(&Data::KillSessions(None)).await?;
+    match c.next_timeout(1_000).await? {
+        Some(Data::KillSessions(Some(n))) => Ok(n as usize),
+        _ => Ok(0),
+    }
 }
 
 /// 读取本机临时密码（由 RustDesk 服务端进程持有）。

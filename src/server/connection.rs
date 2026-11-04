@@ -6497,6 +6497,44 @@ pub struct AuthedConn {
     pub printer: bool,
 }
 
+/// 断开所有入站远程画面会话（宿主「一键断开」的唯一实现）。
+///
+/// 与 CM 手工断开走同一条路：给对端下发 `misc.stop_service`，让它主动收尾。
+/// **不能直接断 TCP** —— 对端会停在「重连中」状态，客户看起来像没断干净。
+///
+/// 返回成功下发断开指令的连接数。实际断连由各连接的 io_loop 完成，
+/// 随后的 `Drop for AuthedConnID` 会把 `session_state` 刷回 idle，
+/// 宿主 3s 内就能看到「无人接管」。
+///
+/// 注意：这里只断**画面/摄像头**会话。文件传输、端口转发是独立连接，
+/// 不在「有人看我屏幕」的语义里，由各自的生命周期管理。
+pub fn kill_remote_sessions() -> usize {
+    use hbb_common::protobuf::Message as _;
+
+    let conns = AUTHED_CONNS.lock().unwrap();
+    let mut killed = 0usize;
+    for c in conns.iter() {
+        // 只断画面/摄像头：文件传输、端口转发属于别的语义，各自管理生命周期
+        if !matches!(c.conn_type, AuthConnType::Remote | AuthConnType::ViewCamera) {
+            continue;
+        }
+        let mut misc = hbb_common::rendezvous_proto::Misc::new();
+        misc.set_stop_service(true);
+        let mut msg = hbb_common::rendezvous_proto::Message::new();
+        msg.set_misc(misc);
+        // 连接的 IPC 通道吃的是 Data；RawMessage 在连接侧直接 send_raw 给对端，
+        // 与 CM 手工断开最终走的路径一致。
+        let Ok(bytes) = msg.write_to_bytes() else {
+            continue;
+        };
+        if c.sender.send(Data::RawMessage(bytes)).is_ok() {
+            killed += 1;
+        }
+    }
+    log::info!("[kill-sessions] 已向 {killed} 个远程会话下发断开指令");
+    killed
+}
+
 mod raii {
     // ALIVE_CONNS: all connections, including unauthorized connections
     // AUTHED_CONNS: all authorized connections

@@ -6540,6 +6540,16 @@ mod raii {
                 printer,
             });
             Self::check_wake_lock();
+            // 状态回传：锁已在上面释放，这里重新计数不会自锁
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            crate::session_state::update(
+                AUTHED_CONNS
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|c| c.conn_type == AuthConnType::Remote)
+                    .count(),
+            );
             use std::sync::Once;
             static _ONCE: Once = Once::new();
             _ONCE.call_once(|| {
@@ -6696,6 +6706,15 @@ mod raii {
                 scrap::wayland::pipewire::try_close_session();
             }
             Self::check_wake_lock();
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            crate::session_state::update(
+                AUTHED_CONNS
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|c| c.conn_type == AuthConnType::Remote)
+                    .count(),
+            );
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 use crate::whiteboard;

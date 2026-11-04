@@ -19,6 +19,8 @@ mod rendezvous_mediator;
 pub use self::rendezvous_mediator::*;
 /// cbindgen:ignore
 pub mod common;
+/// 会话状态回传（宿主读取，见 `session_state.rs` 头注释）
+pub mod session_state;
 #[cfg(not(any(target_os = "ios")))]
 pub mod ipc;
 #[cfg(not(any(

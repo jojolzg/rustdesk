@@ -596,6 +596,17 @@ pub async fn start_server(is_server: bool, no_server: bool) {
         // 这是唯一能让运维拿到它的路径。
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         crate::session_state::publish_password();
+        // laztool: 临时密码 30 分钟定时轮换 + 落盘（替代上游"会话结束即轮换"）。
+        // 轮换只影响下一次连接的密码，已建立的会话不受影响。
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        std::thread::spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(30 * 60));
+                hbb_common::password_security::update_temporary_password();
+                crate::session_state::publish_password();
+                log::info!("temporary password rotated (30min policy)");
+            }
+        });
         std::thread::spawn(move || {
             if let Err(err) = crate::ipc::start("") {
                 log::error!("Failed to start ipc: {}", err);

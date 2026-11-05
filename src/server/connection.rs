@@ -1091,8 +1091,12 @@ impl Connection {
             }
         }
         video_service::notify_video_frame_fetched_by_conn_id(id, None);
+        // laztool: 保留上游"会话结束即轮换"的安全行为；轮换后立即落盘，
+        // 宿主面板读到的才是当前值（否则面板会展示已失效的旧密码）。
+        // 30 分钟定时轮换与手动轮换见 server.rs / --update-temp-password。
         if conn.authorized {
             password::update_temporary_password();
+            crate::session_state::publish_password();
         }
         if let Err(err) = conn.try_port_forward_loop(&mut rx_from_cm).await {
             conn.on_close(&err.to_string(), false).await;

@@ -464,7 +464,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("identical_file_tip", "此文件与对方的一致"),
         ("show_monitors_tip", "在工具栏上显示监视器"),
         ("View Mode", "浏览模式"),
-        ("verify_rustdesk_password_tip", "验证 RustDesk 密码"),
+        ("verify_rustdesk_password_tip", "验证临时密码"),
         ("No need to elevate", "无需提升权限"),
         ("System Sound", "系统音频"),
         ("Default", "默认"),

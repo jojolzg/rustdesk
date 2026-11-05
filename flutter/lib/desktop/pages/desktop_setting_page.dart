@@ -2451,7 +2451,7 @@ class _AboutState extends State<_About> {
               // 把用户导到 rustdesk.com 只会造成"这到底是谁的软件"的困惑。
               // 版权声明保留（AGPL 分发要求），见下方 banner。
               Container(
-                decoration: const BoxDecoration(color: Color(0xFF2c8cff)),
+                decoration: const BoxDecoration(color: Color(0xFFC0392B)),
                 padding:
                     const EdgeInsets.symmetric(vertical: 24, horizontal: 8),
                 child: SelectionArea(

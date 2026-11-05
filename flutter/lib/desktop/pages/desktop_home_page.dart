@@ -428,6 +428,13 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   }
 
   Widget buildHelpCards(String updateUrl) {
+    // laztool: 无头组件不显示「RustDesk 版本更新 (1.5.1)」卡——
+    // 更新由宿主统一分发，组件自更新会绕过分发链路并暴露上游品牌。
+    // 不改 APP_NAME（isCustomClient 会保持 false），所以在名字上做 gate。
+    if (!bind.isCustomClient() &&
+        bind.mainGetAppNameSync() == 'RustDesk') {
+      return buildInstallCard('', '', '', () {});
+    }
     if (!bind.isCustomClient() &&
         updateUrl.isNotEmpty &&
         !isCardClosed &&

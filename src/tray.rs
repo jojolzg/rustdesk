@@ -9,11 +9,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub fn start_tray() {
-    if crate::ui_interface::get_builtin_option(hbb_common::config::keys::OPTION_HIDE_TRAY) == "Y" {
-        #[cfg(not(target_os = "macos"))]
-        {
-            return;
-        }
+    // laztool: 无头组件**无条件不创建托盘**。
+    //
+    // 之前依赖 hide-tray 内置选项 gate，但现场截图证明托盘仍然出现
+    // （BUILTIN_SETTINGS 在 CM 进程的时序/路径不确定）。托盘一旦存在，
+    // 客户就能点出整个 RustDesk 主界面——品牌与安全的双重漏洞，
+    // 所以这里不再依赖任何配置，直接禁用。上游实现保留在下方供参考。
+    #[cfg(not(target_os = "macos"))]
+    {
+        return;
     }
 
     #[cfg(target_os = "linux")]

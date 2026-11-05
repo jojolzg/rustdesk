@@ -3033,19 +3033,23 @@ int versionCmp(String v1, String v2) {
   return bind.versionToNumber(v: v1) - bind.versionToNumber(v: v2);
 }
 
+/// laztool: 会话窗口的标题一律按产品语境命名，不出现上游品牌名。
+/// 上游这里是 "<类型> - <APP_NAME>"，运维端窗口标题会直接写成 RustDesk。
+const String kLaztoolWindowName = "远程协助";
+
 String getWindowName({WindowType? overrideType}) {
   final name = bind.mainGetAppNameSync();
   switch (overrideType ?? kWindowType) {
     case WindowType.Main:
-      return name;
+      return kLaztoolWindowName;
     case WindowType.FileTransfer:
-      return "File Transfer - $name";
+      return "文件传输 - $name";
     case WindowType.ViewCamera:
-      return "View Camera - $name";
+      return "查看摄像头 - $name";
     case WindowType.PortForward:
-      return "Port Forward - $name";
+      return "端口转发 - $name";
     case WindowType.RemoteDesktop:
-      return "Remote Desktop - $name";
+      return kLaztoolWindowName;
     default:
       break;
   }

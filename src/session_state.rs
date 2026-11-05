@@ -48,13 +48,13 @@ pub fn update(remote_count: usize) {
     let path = state_file();
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            log::warn!("[session-state] 创建状态目录失败: {e}");
+            hbb_common::log::warn!("[session-state] 创建状态目录失败: {e}");
             return;
         }
     }
     if let Err(e) = std::fs::write(&path, body) {
         // 写不进去不影响远程会话本身，只在排查时有用
-        log::warn!("[session-state] 写入状态文件失败: {e}");
+        hbb_common::log::warn!("[session-state] 写入状态文件失败: {e}");
     }
 }
 

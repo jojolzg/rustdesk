@@ -6518,9 +6518,11 @@ pub fn kill_remote_sessions() -> usize {
         if !matches!(c.conn_type, AuthConnType::Remote | AuthConnType::ViewCamera) {
             continue;
         }
-        let mut misc = hbb_common::rendezvous_proto::Misc::new();
+        // 注意：stop_service 是**对端消息**(message_proto)，不是 rendezvous 消息。
+        // 写错成 rendezvous_proto 会在编译期报 "could not find `Misc`"，别照直觉猜。
+        let mut misc = hbb_common::message_proto::Misc::new();
         misc.set_stop_service(true);
-        let mut msg = hbb_common::rendezvous_proto::Message::new();
+        let mut msg = hbb_common::message_proto::Message::new();
         msg.set_misc(misc);
         // 连接的 IPC 通道吃的是 Data；RawMessage 在连接侧直接 send_raw 给对端，
         // 与 CM 手工断开最终走的路径一致。

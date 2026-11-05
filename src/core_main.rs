@@ -733,6 +733,9 @@ pub fn core_main() -> Option<Vec<String>> {
             // call connection manager to establish connections
             // meanwhile, return true to call flutter window to show control panel
             crate::ui_interface::start_option_status_sync();
+            // laztool: CM 作为实时桥的 cm 客户端，上报免密连接审批请求
+            #[cfg(windows)]
+            crate::bridge::start(crate::bridge::Role::Cm);
         } else if args[0] == "--whiteboard" {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {

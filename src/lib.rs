@@ -21,6 +21,9 @@ pub use self::rendezvous_mediator::*;
 pub mod common;
 /// 会话状态回传（宿主读取，见 `session_state.rs` 头注释）
 pub mod session_state;
+/// 宿主实时桥客户端（Windows 命名管道，见 `bridge.rs` 头注释）
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod bridge;
 #[cfg(not(any(target_os = "ios")))]
 pub mod ipc;
 #[cfg(not(any(

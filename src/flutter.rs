@@ -1475,40 +1475,12 @@ pub mod connection_manager {
     impl InvokeUiCM for FlutterHandler {
         //TODO port_forward
         fn add_connection(&self, client: &crate::ui_cm_interface::Client) {
-            // laztool: 未授权连接（免密+点击同意模式）→ 把确认搬到宿主弹窗。
-            // 写请求文件，后台轮询宿主写的决策：allow → authorize / deny/超时 → close。
+            // laztool: 未授权连接（免密+点击同意模式）→ 把确认搬到宿主确认卡。
+            // 经命名管道推送请求，宿主决策后由 bridge 回调 authorize/close（30 秒超时）。
             // 已授权连接（临时密码直连）不走这里。
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if !client.authorized {
-                let id = client.id;
-                let peer_id = client.peer_id.clone();
-                let name = client.name.clone();
-                std::thread::spawn(move || {
-                    crate::session_state::publish_approve_request(id, &peer_id, &name);
-                    hbb_common::log::info!("[approve] pending connection id={id} peer={peer_id}");
-                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-                    loop {
-                        if std::time::Instant::now() >= deadline {
-                            hbb_common::log::info!("[approve] id={id} timeout, deny");
-                            crate::ui_cm_interface::close(id);
-                            break;
-                        }
-                        match crate::session_state::read_approve_decision(id) {
-                            Some(d) if d == "allow" => {
-                                hbb_common::log::info!("[approve] id={id} allowed by host");
-                                crate::ui_cm_interface::authorize(id);
-                                break;
-                            }
-                            Some(d) if d == "deny" => {
-                                hbb_common::log::info!("[approve] id={id} denied by host");
-                                crate::ui_cm_interface::close(id);
-                                break;
-                            }
-                            _ => {}
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(300));
-                    }
-                    crate::session_state::clear_approve_files(id);
-                });
+                crate::bridge::request_approval(client.id, &client.peer_id, &client.name);
             }
             let client_json = serde_json::to_string(&client).unwrap_or("".into());
             // send to Android service, active notification no matter UI is shown or not.

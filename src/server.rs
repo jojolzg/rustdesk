@@ -591,6 +591,9 @@ pub async fn start_server(is_server: bool, no_server: bool) {
 
     if is_server {
         crate::common::set_server_running(true);
+        // laztool: 服务进程作为实时桥的 service 客户端，主动推送会话状态并执行控制指令
+        #[cfg(windows)]
+        crate::bridge::start(crate::bridge::Role::Service);
         // 只有走到这里才是真正在跑服务端的进程，临时密码才是权威值。
         // 宿主用 `--get-temp-password` 读的就是这个文件——CM 常隐后客户看不到密码，
         // 这是唯一能让运维拿到它的路径。

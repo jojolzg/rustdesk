@@ -979,6 +979,8 @@ async fn handle(data: Data, stream: &mut Connection) {
                     }
                 } else if name == "temporary-password" {
                     password::update_temporary_password();
+                    // 轮换后立即刷新宿主可读的共享文件，否则 CLI 会一直读到旧值
+                    crate::session_state::publish_password();
                 } else if name == "permanent-password" {
                     if Config::is_disable_change_permanent_password() {
                         log::warn!("Changing permanent password is disabled");

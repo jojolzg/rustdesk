@@ -244,13 +244,9 @@ pub fn core_main() -> Option<Vec<String>> {
                         }
                     },
                 };
-                Toast::new(Toast::POWERSHELL_APP_ID)
-                    .title(&config::APP_NAME.read().unwrap())
-                    .text1(&translate(text))
-                    .sound(Some(Sound::Default))
-                    .duration(Duration::Short)
-                    .show()
-                    .ok();
+                // laztool: 组件是无头的，装完不弹系统通知——
+                // 右下角突然弹"安装成功"只会让客户以为中了什么。
+                log::info!("install: {}", text);
                 return None;
             } else if args[0] == "--after-install" {
                 if let Err(err) = platform::run_after_install() {
@@ -276,13 +272,7 @@ pub fn core_main() -> Option<Vec<String>> {
                         translate("Installation failed!".to_string())
                     }
                 };
-                Toast::new(Toast::POWERSHELL_APP_ID)
-                    .title(&config::APP_NAME.read().unwrap())
-                    .text1(&text)
-                    .sound(Some(Sound::Default))
-                    .duration(Duration::Short)
-                    .show()
-                    .ok();
+                log::info!("silent-install: {}", text);
                 return None;
             } else if args[0] == "--uninstall-cert" {
                 #[cfg(windows)]
@@ -474,6 +464,18 @@ pub fn core_main() -> Option<Vec<String>> {
             return None;
         } else if args[0] == "--get-id" {
             println!("{}", crate::ipc::get_id());
+            return None;
+        } else if args[0] == "--update-temp-password" {
+            // 轮换必须由**服务端进程**执行：TEMPORARY_PASSWORD 是每进程一份的 static，
+            // 在 CLI 进程里调 update 只会改一份没人用的副本。这里经 IPC 让服务做，
+            // 服务端处理完会顺手把新值落到 remote-password.txt。
+            match crate::ipc::update_temporary_password() {
+                Ok(_) => println!("ok"),
+                Err(e) => {
+                    log::warn!("[update-temp-password] {e}");
+                    println!("ERR_IPC");
+                }
+            }
             return None;
         } else if args[0] == "--kill-sessions" {
             // laztool：客户机侧「一键断开」。只断画面/摄像头会话，

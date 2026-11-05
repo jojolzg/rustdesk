@@ -30,6 +30,44 @@ fn state_dir() -> PathBuf {
     std::env::temp_dir().join("laztool")
 }
 
+/// 临时密码共享文件。
+///
+/// 为什么需要它：`hbb_common::password_security::TEMPORARY_PASSWORD` 是**进程内**
+/// 的 static，桌面端 `ui_interface::temporary_password()` 又只是 GUI 从 IPC 拿到的副本。
+/// 新起的 CLI 进程里这两条都是空的，`--get-temp-password` 只能拿到空串。
+/// 所以由**真正的服务端进程**把值落到这里，CLI 直接读文件。
+pub fn password_file() -> PathBuf {
+    state_dir().join("remote-password.txt")
+}
+
+/// 把本进程持有的临时密码写出去。
+///
+/// **只能由服务端进程调用**：其他进程调用会在自己的 static 里生成一个全新随机值，
+/// 写出去就是"看起来正确、实际连不上"的假密码，比没有更糟。
+pub fn publish_password() {
+    let pw = hbb_common::password_security::temporary_password();
+    if pw.is_empty() {
+        return;
+    }
+    let path = password_file();
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            hbb_common::log::warn!("[session-state] 创建目录失败: {e}");
+            return;
+        }
+    }
+    if let Err(e) = std::fs::write(&path, &pw) {
+        hbb_common::log::warn!("[session-state] 写入临时密码失败: {e}");
+    }
+}
+
+/// 读服务端落下的临时密码（CLI 侧用）。
+pub fn read_password() -> String {
+    std::fs::read_to_string(password_file())
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default()
+}
+
 /// 按当前远程连接数刷新状态文件。
 ///
 /// 调用点只有两处：`AuthedConnID::new`（建连后）与 `Drop for AuthedConnID`
@@ -56,6 +94,8 @@ pub fn update(remote_count: usize) {
         // 写不进去不影响远程会话本身，只在排查时有用
         hbb_common::log::warn!("[session-state] 写入状态文件失败: {e}");
     }
+    // 连接/断开事件经常伴随密码轮换，顺手刷新一次
+    publish_password();
 }
 
 #[cfg(test)]

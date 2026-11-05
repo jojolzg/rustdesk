@@ -591,6 +591,11 @@ pub async fn start_server(is_server: bool, no_server: bool) {
 
     if is_server {
         crate::common::set_server_running(true);
+        // 只有走到这里才是真正在跑服务端的进程，临时密码才是权威值。
+        // 宿主用 `--get-temp-password` 读的就是这个文件——CM 常隐后客户看不到密码，
+        // 这是唯一能让运维拿到它的路径。
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        crate::session_state::publish_password();
         std::thread::spawn(move || {
             if let Err(err) = crate::ipc::start("") {
                 log::error!("Failed to start ipc: {}", err);

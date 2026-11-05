@@ -1853,7 +1853,14 @@ pub fn get_temporary_password() -> String {
             return v;
         }
     }
-    crate::ui_interface::temporary_password()
+    // IPC 不通（服务未起 / 作用域不匹配）时，退到服务端进程落的文件。
+    // 注意不要退回 ui_interface::temporary_password()：桌面端它只是 GUI 的
+    // IPC 副本，CLI 进程里恒为空，而且它的 fallback 会在本地生成一个假密码。
+    let from_file = crate::session_state::read_password();
+    if !from_file.is_empty() {
+        return from_file;
+    }
+    String::new()
 }
 
 pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>) {

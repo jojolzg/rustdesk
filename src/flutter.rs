@@ -1507,7 +1507,7 @@ pub mod connection_manager {
                         }
                         std::thread::sleep(std::time::Duration::from_millis(300));
                     }
-                    crate::session_state::clear_approve_request();
+                    crate::session_state::clear_approve_files(id);
                 });
             }
             let client_json = serde_json::to_string(&client).unwrap_or("".into());

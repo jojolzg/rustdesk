@@ -68,37 +68,48 @@ pub fn read_password() -> String {
         .unwrap_or_default()
 }
 
-/// 免密连接的「客户确认」协议文件。
+/// 免密连接的「客户确认」协议：**按连接 id 一连接一文件**。
 ///
-/// 流程：CM 进程收到未授权连接 → 写 request → 宿主右下角弹窗 →
-/// 宿主写 decision → CM 轮询到决策 → authorize/close。
+/// 流程：CM 进程收到未授权连接 → 写 `remote-approve/<id>.json` →
+/// 宿主右下角按堆叠展示全部 pending → 宿主写 `<id>.decision.json` →
+/// CM 轮询到决策 → authorize/close。
+///
+/// 为什么按 id 拆文件而不是一个大 JSON：**多人同时连接是常态**
+/// （两个运维同时接同一台机器），单文件覆盖式会让先来的请求被后来的
+/// 覆盖掉、超时被拒。一连接一文件后，请求/决策互不干扰，也不需要
+/// 跨进程文件锁——两个进程各写各的文件名。
+///
 /// 为什么不经组件自己的 CM 窗口：CM 被我们隐藏了，没人能点它里面的按钮；
 /// 把确认搬到宿主弹窗，客户看到的始终是桌面助手的界面。
-/// 审批文件目录：宿主的 app_data_dir（%APPDATA%\cn.laztool.desktop）。
 ///
-/// 刻意不用 state_dir()（ProgramData）：CM 与宿主都以**登录用户**身份运行，
-/// ProgramData 下由 SYSTEM 创建的目录对普通用户未必可写；同用户目录读写无 ACL 问题。
+/// 目录用宿主的 app_data_dir（%APPDATA%\cn.laztool.desktop）：CM 与宿主
+/// 都以**登录用户**身份运行，同用户目录读写无 ACL 问题（ProgramData 下
+/// SYSTEM 创建的目录对普通用户未必可写）。
 fn approve_dir() -> PathBuf {
     #[cfg(windows)]
     {
         if let Ok(base) = std::env::var("APPDATA") {
             if !base.trim().is_empty() {
-                return PathBuf::from(base).join("cn.laztool.desktop");
+                return PathBuf::from(base)
+                    .join("cn.laztool.desktop")
+                    .join("remote-approve");
             }
         }
     }
-    std::env::temp_dir().join("laztool_desktop")
+    std::env::temp_dir()
+        .join("laztool_desktop")
+        .join("remote-approve")
 }
 
-pub fn approve_request_file() -> PathBuf {
-    approve_dir().join("remote-approve.json")
+fn approve_request_file(id: i32) -> PathBuf {
+    approve_dir().join(format!("{id}.json"))
 }
 
-pub fn approve_decision_file() -> PathBuf {
-    approve_dir().join("remote-approve-decision.json")
+fn approve_decision_file(id: i32) -> PathBuf {
+    approve_dir().join(format!("{id}.decision.json"))
 }
 
-/// CM 侧：登记一条待确认的连接请求（覆盖式，同一时刻只展示最新一条）。
+/// CM 侧：登记一条待确认的连接请求（每连接独立文件，互不覆盖）。
 pub fn publish_approve_request(id: i32, peer_id: &str, name: &str) {
     let body = format!(
         "{{\"id\":{},\"peer_id\":{},\"name\":{},\"ts\":{}}}",
@@ -107,28 +118,26 @@ pub fn publish_approve_request(id: i32, peer_id: &str, name: &str) {
         serde_json::json!(name),
         chrono::Local::now().timestamp()
     );
-    let path = approve_request_file();
+    let path = approve_request_file(id);
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(&path, body);
 }
 
-/// 清掉请求文件（决策完成/超时后调用，宿主据此关弹窗）。
-pub fn clear_approve_request() {
-    let _ = std::fs::remove_file(approve_request_file());
+/// 清掉本连接的请求与决策文件（决策完成/超时后调用）。
+pub fn clear_approve_files(id: i32) {
+    let _ = std::fs::remove_file(approve_request_file(id));
+    let _ = std::fs::remove_file(approve_decision_file(id));
 }
 
-/// 读宿主写的决策。返回 None = 还没决策或 id 不匹配。
+/// 读宿主写的决策。返回 None = 还没决策。
 pub fn read_approve_decision(id: i32) -> Option<String> {
-    let text = std::fs::read_to_string(approve_decision_file()).ok()?;
+    let text = std::fs::read_to_string(approve_decision_file(id)).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    if v.get("id")?.as_i64()? != id as i64 {
-        return None;
-    }
     let d = v.get("decision")?.as_str()?.to_owned();
-    // 消费掉，防止旧决策影响下一个连接
-    let _ = std::fs::remove_file(approve_decision_file());
+    // 消费掉：决策文件与请求文件一起清，防止旧决策影响后续
+    let _ = std::fs::remove_file(approve_decision_file(id));
     Some(d)
 }
 

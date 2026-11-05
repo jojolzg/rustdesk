@@ -1484,7 +1484,7 @@ pub mod connection_manager {
                 let name = client.name.clone();
                 std::thread::spawn(move || {
                     crate::session_state::publish_approve_request(id, &peer_id, &name);
-                    hbb_common::hbb_common::log::info!("[approve] pending connection id={id} peer={peer_id}");
+                    hbb_common::log::info!("[approve] pending connection id={id} peer={peer_id}");
                     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
                     loop {
                         if std::time::Instant::now() >= deadline {

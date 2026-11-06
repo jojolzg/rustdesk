@@ -11,4 +11,6 @@ jobs:
     secrets: inherit
     with:
       upload-artifact: true
-      upload-tag: "nightly"
+      # 不能再用 `nightly`：master 分支的上游定时构建（每天 0 点 UTC）也发到同一个
+      # release tag，会把定制产物覆盖成上游产物。定制分支固定用自己的 tag。
+      upload-tag: "laztool-nightly"

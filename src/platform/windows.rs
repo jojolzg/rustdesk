@@ -1941,6 +1941,39 @@ pub fn get_reg(name: &str) -> String {
     get_reg_of(&subkey, name)
 }
 
+/// 读取宿主（桌面助手）的安装目录：NSIS 与 MSI 都会在卸载登记项里写 `InstallLocation`。
+///
+/// 组件侧用它作为**动态信任基准**：安装位置由管理员的安装过程写进 HKLM，
+/// 运行期只与实际宿主进程路径比对，不写死 Program Files，也不依赖可手改的文件。
+pub fn get_host_install_location(product_name: &str) -> Option<String> {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let roots = [
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        "Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+    ];
+    for root in roots {
+        let Ok(uninstall) = hklm.open_subkey(root) else {
+            continue;
+        };
+        for key in uninstall.enum_keys().flatten() {
+            let Ok(entry) = uninstall.open_subkey(&key) else {
+                continue;
+            };
+            let display: String = entry.get_value("DisplayName").unwrap_or_default();
+            if !display.eq_ignore_ascii_case(product_name) {
+                continue;
+            }
+            let loc: String = entry.get_value("InstallLocation").unwrap_or_default();
+            // NSIS 写入的值带引号；MSI 的 ARPINSTALLLOCATION 可能不带。统一去掉。
+            let loc = loc.trim().trim_matches('"').trim_end_matches('\\');
+            if !loc.is_empty() {
+                return Some(loc.to_owned());
+            }
+        }
+    }
+    None
+}
+
 fn get_reg_of(subkey: &str, name: &str) -> String {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     if let Ok(tmp) = hklm.open_subkey(subkey.replace("HKEY_LOCAL_MACHINE\\", "")) {

@@ -103,9 +103,10 @@ mod imp {
 
     const APPROVAL_TIMEOUT_MS: u64 = 30_000;
     const MAX_LINE: usize = 64 * 1024;
-    /// 宿主（景智桌面助手）的可执行文件名。组件只能连到这个进程，
-    /// 防止同机其他进程先占管道后冒充宿主。
+    /// 宿主（景智桌面助手）的可执行文件名与产品名。用于生成信任基准路径：
+    /// 安装期记录（laztool-host.txt）优先，缺失时用卸载登记项的 InstallLocation。
     const HOST_EXE_NAME: &str = "景智桌面助手.exe";
+    const HOST_PRODUCT_NAME: &str = "景智桌面助手";
 
     /// 当前连接的上行通道；断线时为 None，事件调用方无感跳过。
     static SENDER: Mutex<Option<tokio_mpsc::UnboundedSender<String>>> = Mutex::new(None);
@@ -254,18 +255,39 @@ mod imp {
 
         let path = crate::platform::windows::get_process_executable_path(pid)
             .map_err(|e| format!("无法读取宿主进程路径: {e}"))?;
-        // 优先用安装期写入的宿主绝对路径（支持自定义安装目录，且 Program Files
-        // 只有管理员可写，用户态伪造不了）；没有记录时退回“名称 + Program Files”。
-        if let Some(expected) = expected_host_path() {
-            if !paths_equal(&path, &expected) {
-                return Err(format!(
-                    "宿主进程路径与安装记录不一致: 实际 {}, 期望 {}",
-                    path.display(),
-                    expected.display()
-                ));
+        // 信任基准 = 安装期写入的宿主绝对路径（安装器在提权上下文写，用户态伪造不了）。
+        // 运行期只把基准和**实际运行路径**做动态比对，不写死任何目录：
+        // - 有记录：路径必须完全一致（默认 Program Files 与自定义安装目录都能覆盖）；
+        // - 无记录：release fail-closed，不再用“名称 + Program Files”猜测；
+        //   debug 构建保留 `tauri dev` 放行（这不进发布产物）。
+        match expected_host_path() {
+            Some(expected) => {
+                if !paths_equal(&path, &expected) {
+                    return Err(format!(
+                        "宿主进程路径与安装记录不一致: 实际 {}, 期望 {}",
+                        path.display(),
+                        expected.display()
+                    ));
+                }
             }
-        } else if !is_trusted_host_path(&path) {
-            return Err(format!("宿主进程不是受信任的桌面助手: {}", path.display()));
+            None => {
+                #[cfg(debug_assertions)]
+                {
+                    if !is_trusted_host_path(&path) {
+                        return Err(format!(
+                            "缺少安装期宿主路径记录，且不是受信任的 debug 宿主: {}",
+                            path.display()
+                        ));
+                    }
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    return Err(format!(
+                        "无法确定宿主安装位置（无安装期记录且卸载登记项无 InstallLocation），拒绝连接: {}",
+                        path.display()
+                    ));
+                }
+            }
         }
         // 无法判定时按最坏情况处理（视为 SYSTEM），宁可断开重连也不放行。
         if crate::platform::windows::is_process_running_as_system(pid).unwrap_or(true) {
@@ -293,10 +315,20 @@ mod imp {
         Ok(())
     }
 
-    /// 读取安装期写入的宿主 exe 绝对路径（UTF-16LE，位于组件安装目录）。
+    /// 信任基准路径：安装期记录（laztool-host.txt）优先，缺失时回落到
+    /// 卸载登记项里的 `InstallLocation`（NSIS 与 MSI 都会写）。
     ///
-    /// 返回 None 表示旧安装/文件缺失，调用方退回名称 + Program Files 的保守校验。
+    /// 两者都来自管理员的安装过程（Program Files 与 HKLM），运行期只和**实际运行的**
+    /// 宿主进程路径动态比对；不是用户态能随手写的文件。
     fn expected_host_path() -> Option<PathBuf> {
+        expected_host_path_from_file().or_else(|| {
+            crate::platform::windows::get_host_install_location(HOST_PRODUCT_NAME)
+                .map(|dir| PathBuf::from(dir).join(HOST_EXE_NAME))
+        })
+    }
+
+    /// 读取安装期写入的宿主 exe 绝对路径（UTF-16LE，位于组件安装目录）。
+    fn expected_host_path_from_file() -> Option<PathBuf> {
         let exe = std::env::current_exe().ok()?;
         let dir = exe.parent()?;
         let bytes = std::fs::read(dir.join("laztool-host.txt")).ok()?;
@@ -330,6 +362,9 @@ mod imp {
         normalize_path(left) == normalize_path(right)
     }
 
+    /// 仅 debug 构建使用：没有安装期记录时，允许 `tauri dev` 的宿主。
+    /// release 构建要求必须有记录，因此这个函数不参与发布产物。
+    #[cfg(debug_assertions)]
     fn is_trusted_host_path(path: &Path) -> bool {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             return false;
@@ -337,16 +372,10 @@ mod imp {
         if name.eq_ignore_ascii_case(HOST_EXE_NAME) {
             return under_program_files(path);
         }
-        #[cfg(debug_assertions)]
-        {
-            if name.eq_ignore_ascii_case("src-tauri.exe") {
-                // 仅 debug 组件接受 `tauri dev` 的宿主；release 组件不会走这个分支。
-                return true;
-            }
-        }
-        false
+        name.eq_ignore_ascii_case("src-tauri.exe")
     }
 
+    #[cfg(debug_assertions)]
     fn under_program_files(path: &Path) -> bool {
         let normalized = path
             .to_string_lossy()

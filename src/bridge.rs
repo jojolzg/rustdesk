@@ -82,6 +82,8 @@ pub fn request_approval(id: i32, peer_id: &str, name: &str) {
 #[cfg(windows)]
 mod imp {
     use std::collections::HashMap;
+    use std::os::windows::io::AsRawHandle;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Mutex, OnceLock};
     use std::time::{Duration, Instant};
@@ -94,11 +96,16 @@ mod imp {
         sync::mpsc as tokio_mpsc,
     };
     use serde_json::{json, Value};
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
 
     use super::{Role, PIPE_NAME, PROTO};
 
     const APPROVAL_TIMEOUT_MS: u64 = 30_000;
     const MAX_LINE: usize = 64 * 1024;
+    /// 宿主（景智桌面助手）的可执行文件名。组件只能连到这个进程，
+    /// 防止同机其他进程先占管道后冒充宿主。
+    const HOST_EXE_NAME: &str = "景智桌面助手.exe";
 
     /// 当前连接的上行通道；断线时为 None，事件调用方无感跳过。
     static SENDER: Mutex<Option<tokio_mpsc::UnboundedSender<String>>> = Mutex::new(None);
@@ -221,15 +228,144 @@ mod imp {
         PENDING.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
+    /// 校验管道另一端的 Server 身份，防止本地进程抢占同名管道后冒充宿主。
+    ///
+    /// 旧实现直接 `open` 后发 hello，任何先创建 `\\.\pipe\laztool-remote-bridge` 的
+    /// 进程都能收到设备的 ID/版本并在审批请求上回 “allow”。这里在发送 hello 前
+    /// 校验：宿主进程必须是受信任路径下的桌面助手、不能是 SYSTEM、且会话匹配
+    /// （CM 与宿主同会话；service 连接的宿主必须在交互会话）。
+    fn verify_server(pipe: &NamedPipeClient, role: Role) -> Result<(), String> {
+        let mut pid = 0u32;
+        let ok = unsafe { GetNamedPipeServerProcessId(HANDLE(pipe.as_raw_handle()), &mut pid) };
+        if ok.is_err() || pid == 0 {
+            return Err("无法读取宿主进程 ID".to_owned());
+        }
+
+        let path = crate::platform::windows::get_process_executable_path(pid)
+            .map_err(|e| format!("无法读取宿主进程路径: {e}"))?;
+        // 优先用安装期写入的宿主绝对路径（支持自定义安装目录，且 Program Files
+        // 只有管理员可写，用户态伪造不了）；没有记录时退回“名称 + Program Files”。
+        if let Some(expected) = expected_host_path() {
+            if !paths_equal(&path, &expected) {
+                return Err(format!(
+                    "宿主进程路径与安装记录不一致: 实际 {}, 期望 {}",
+                    path.display(),
+                    expected.display()
+                ));
+            }
+        } else if !is_trusted_host_path(&path) {
+            return Err(format!("宿主进程不是受信任的桌面助手: {}", path.display()));
+        }
+        // 无法判定时按最坏情况处理（视为 SYSTEM），宁可断开重连也不放行。
+        if crate::platform::windows::is_process_running_as_system(pid).unwrap_or(true) {
+            return Err("宿主进程不能以 SYSTEM 身份运行".to_owned());
+        }
+
+        let server_session = crate::platform::windows::get_session_id_of_process(pid)
+            .ok_or_else(|| "无法读取宿主会话".to_owned())?;
+        let current_session = crate::platform::windows::get_current_process_session_id()
+            .ok_or_else(|| "无法读取组件会话".to_owned())?;
+        match role {
+            Role::Cm => {
+                if server_session != current_session {
+                    return Err(format!(
+                        "宿主会话 {server_session} 与组件会话 {current_session} 不一致"
+                    ));
+                }
+            }
+            Role::Service => {
+                if server_session == 0 {
+                    return Err("宿主进程不应以服务会话身份运行".to_owned());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 读取安装期写入的宿主 exe 绝对路径（UTF-16LE，位于组件安装目录）。
+    ///
+    /// 返回 None 表示旧安装/文件缺失，调用方退回名称 + Program Files 的保守校验。
+    fn expected_host_path() -> Option<PathBuf> {
+        let exe = std::env::current_exe().ok()?;
+        let dir = exe.parent()?;
+        let bytes = std::fs::read(dir.join("laztool-host.txt")).ok()?;
+        let mut units = Vec::with_capacity(bytes.len() / 2);
+        for chunk in bytes.chunks_exact(2) {
+            units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        let text = String::from_utf16_lossy(&units);
+        let line = text
+            .trim()
+            .trim_start_matches('\u{feff}')
+            .lines()
+            .next()?
+            .trim();
+        if line.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(line))
+        }
+    }
+
+    fn normalize_path(path: &Path) -> String {
+        path.to_string_lossy()
+            .replace('/', "\\")
+            .to_ascii_lowercase()
+            .trim()
+            .to_owned()
+    }
+
+    fn paths_equal(left: &Path, right: &Path) -> bool {
+        normalize_path(left) == normalize_path(right)
+    }
+
+    fn is_trusted_host_path(path: &Path) -> bool {
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            return false;
+        };
+        if name.eq_ignore_ascii_case(HOST_EXE_NAME) {
+            return under_program_files(path);
+        }
+        #[cfg(debug_assertions)]
+        {
+            if name.eq_ignore_ascii_case("src-tauri.exe") {
+                // 仅 debug 组件接受 `tauri dev` 的宿主；release 组件不会走这个分支。
+                return true;
+            }
+        }
+        false
+    }
+
+    fn under_program_files(path: &Path) -> bool {
+        let normalized = path
+            .to_string_lossy()
+            .replace('/', "\\")
+            .to_ascii_lowercase();
+        for key in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+            if let Ok(base) = std::env::var(key) {
+                let base = base.replace('/', "\\").to_ascii_lowercase();
+                if normalized.starts_with(&(base + "\\")) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     async fn connect_loop(role: Role) {
         let mut backoff = Duration::from_millis(200);
         loop {
             match ClientOptions::new().open(PIPE_NAME) {
                 Ok(pipe) => {
-                    backoff = Duration::from_millis(200);
-                    run_connection(pipe, role).await;
-                    // 宿主刚断开时不要立刻复连打满 CPU
-                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    // 先确认 Server 是宿主，再发 hello；不通过就丢弃连接、退避重试。
+                    if let Err(e) = verify_server(&pipe, role) {
+                        log::warn!("[bridge] 拒绝不受信任的宿主连接: {e}");
+                    } else {
+                        backoff = Duration::from_millis(200);
+                        run_connection(pipe, role).await;
+                        // 宿主刚断开时不要立刻复连打满 CPU
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
                 }
                 Err(e) => {
                     log::debug!("[bridge] 连接宿主失败: {e}");
@@ -332,20 +468,31 @@ mod imp {
                 send_line(tx, "ack", Some(req_id), ack);
             }
             "approval.decision" => {
+                let req_id = v.get("req_id").and_then(Value::as_str).unwrap_or("");
                 let id = v["data"].get("id").and_then(Value::as_i64).unwrap_or(0) as i32;
                 let allow = v["data"]
                     .get("allow")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                if let Some(sender) = pending()
+                let delivered = if let Some(sender) = pending()
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .remove(&id)
                 {
                     let _ = sender.send(allow);
+                    true
                 } else {
                     log::warn!("[bridge] 决策找不到对应请求 id={id}");
-                }
+                    false
+                };
+                // 必须回 ack：宿主按 2s 超时配对决策请求，旧实现不回会导致
+                // 每次审批都被判失败、审计写不进，尽管授权/拒绝实际已生效。
+                let ack = if delivered {
+                    json!({ "ok": true, "data": { "id": id } })
+                } else {
+                    json!({ "ok": false, "error": format!("决策找不到对应请求 id={id}") })
+                };
+                send_line(tx, "ack", Some(req_id), ack);
             }
             "ping" => {
                 send_line(tx, "pong", None, json!({}));

@@ -1774,6 +1774,7 @@ impl Connection {
             auth_conn_type,
             self.session_key(),
             self.tx_from_authed.clone(),
+            self.tx_from_cm.clone(),
             self.lr.clone(),
         ));
         self.session_last_recv_time = SESSIONS
@@ -6497,7 +6498,11 @@ pub struct AuthedConn {
     pub conn_id: i32,
     pub conn_type: AuthConnType,
     pub session_key: SessionKey,
+    /// 连接自己消费的通道（目前只处理打印数据）。
     pub sender: mpsc::UnboundedSender<Data>,
+    /// 投递给**连接主循环**的通道：`Data::Close` / `Data::RawMessage` 由它处理。
+    /// 旧实现把断开指令发到 `sender`（只处理 PrinterData），所以「一键断开」永远无效。
+    pub cm_sender: mpsc::UnboundedSender<Data>,
     pub printer: bool,
 }
 
@@ -6534,9 +6539,9 @@ pub fn kill_remote_sessions() -> usize {
         let Ok(bytes) = msg.write_to_bytes() else {
             continue;
         };
-        if c.sender.send(Data::RawMessage(bytes)).is_ok() {
+        if c.cm_sender.send(Data::RawMessage(bytes)).is_ok() {
             killed += 1;
-            force_close.push(c.sender.clone());
+            force_close.push(c.cm_sender.clone());
         }
     }
     drop(conns);
@@ -6586,6 +6591,7 @@ mod raii {
             conn_type: AuthConnType,
             session_key: SessionKey,
             sender: mpsc::UnboundedSender<Data>,
+            cm_sender: mpsc::UnboundedSender<Data>,
             lr: LoginRequest,
         ) -> Self {
             let printer = conn_type == crate::server::AuthConnType::Remote
@@ -6596,6 +6602,7 @@ mod raii {
                 conn_type,
                 session_key,
                 sender,
+                cm_sender,
                 printer,
             });
             Self::check_wake_lock();

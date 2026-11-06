@@ -121,6 +121,11 @@ mod imp {
         if STARTED.swap(true, Ordering::SeqCst) {
             return;
         }
+        #[cfg(windows)]
+        if role == Role::Service {
+            // 组件生命周期不得大于宿主：服务端进程定期确认宿主还在。
+            spawn_host_watchdog();
+        }
         let _ = std::thread::Builder::new()
             .name("laztool-bridge".to_owned())
             .spawn(move || {
@@ -555,6 +560,16 @@ mod imp {
         }
         match name {
             "kill_sessions" => Ok(json!({ "killed": crate::server::kill_remote_sessions() })),
+            "shutdown" => {
+                // 宿主退出前调用：先断开所有会话，再延迟停服务并退出自身。
+                // 延迟是为了让这条 ack 先写回宿主（宿主最多等 2s）。
+                let killed = crate::server::kill_remote_sessions();
+                std::thread::spawn(|| {
+                    std::thread::sleep(Duration::from_millis(600));
+                    shutdown_service_and_exit();
+                });
+                Ok(json!({ "killed": killed }))
+            }
             "get_temp_password" => {
                 let mut pw = hbb_common::password_security::temporary_password();
                 if pw.is_empty() {
@@ -572,6 +587,67 @@ mod imp {
             "get_id" => Ok(json!({ "id": hbb_common::config::Config::get_id() })),
             other => Err(format!("未知指令: {other}")),
         }
+    }
+
+    /// 宿主管道是否还在（`WaitNamedPipeW` 只探测，不占用实例）。
+    #[cfg(windows)]
+    fn host_pipe_present() -> bool {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn WaitNamedPipeW(name: *const u16, timeout: u32) -> i32;
+            fn GetLastError() -> u32;
+        }
+
+        let name: Vec<u16> = OsStr::new(PIPE_NAME)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        if unsafe { WaitNamedPipeW(name.as_ptr(), 0) } != 0 {
+            return true;
+        }
+        // 231 = ERROR_PIPE_BUSY：管道存在但实例都被占用，仍视为宿主活着
+        const ERROR_PIPE_BUSY: u32 = 231;
+        unsafe { GetLastError() == ERROR_PIPE_BUSY }
+    }
+
+    /// 停止组件服务并退出当前进程（服务端进程以 SYSTEM 身份运行，可执行 sc stop）。
+    #[cfg(windows)]
+    fn shutdown_service_and_exit() {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let app = crate::get_app_name();
+        let _ = std::process::Command::new("sc.exe")
+            .args(["stop", app.as_str()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+        std::thread::sleep(Duration::from_millis(800));
+        std::process::exit(0);
+    }
+
+    /// 宿主异常消失（崩溃/被强杀）后的兜底：90s 没有宿主就自行收尾。
+    #[cfg(windows)]
+    fn spawn_host_watchdog() {
+        let _ = std::thread::Builder::new()
+            .name("laztool-host-watch".to_owned())
+            .spawn(|| {
+                let mut missing_secs = 0u64;
+                loop {
+                    std::thread::sleep(Duration::from_secs(15));
+                    if host_pipe_present() {
+                        missing_secs = 0;
+                        continue;
+                    }
+                    missing_secs += 15;
+                    if missing_secs >= 90 {
+                        log::warn!("[bridge] 宿主已消失 {missing_secs}s，停止组件服务");
+                        shutdown_service_and_exit();
+                    }
+                }
+            });
     }
 
     fn authed_count() -> u32 {

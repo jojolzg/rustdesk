@@ -351,9 +351,8 @@ class ChatModel with ChangeNotifier {
       return;
     }
     if (text.isEmpty) return;
-    if (desktopType == DesktopType.cm) {
-      await showCmWindow();
-    }
+    // laztool: CM 常隐，聊天不得弹出完整 RustDesk 主界面
+    // （否则客户可改永久密码/服务器配置，等于绕过宿主的无头约束）。
     String? peerId;
     if (id == clientModeID) {
       peerId = session.id;

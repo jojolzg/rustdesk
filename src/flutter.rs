@@ -1480,7 +1480,20 @@ pub mod connection_manager {
             // 已授权连接（临时密码直连）不走这里。
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if !client.authorized {
-                crate::bridge::request_approval(client.id, &client.peer_id, &client.name);
+                // 审批卡需要知道“请求的是屏幕/文件/摄像头/终端/端口转发”，
+                // 宿主才能给出与实际能力一致的授权文案。
+                let kind = if client.is_file_transfer {
+                    "file_transfer"
+                } else if client.is_view_camera {
+                    "view_camera"
+                } else if client.is_terminal {
+                    "terminal"
+                } else if !client.port_forward.is_empty() {
+                    "port_forward"
+                } else {
+                    "remote"
+                };
+                crate::bridge::request_approval(client.id, &client.peer_id, &client.name, kind);
             }
             let client_json = serde_json::to_string(&client).unwrap_or("".into());
             // send to Android service, active notification no matter UI is shown or not.

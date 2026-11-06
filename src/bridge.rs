@@ -65,14 +65,14 @@ pub fn emit_session(active: bool, count: u32, since_ms: i64) {
 }
 
 /// CM 收到未授权连接 → 推送审批请求，阻塞等待宿主决策（30 秒超时自动拒绝）。
-pub fn request_approval(id: i32, peer_id: &str, name: &str) {
+pub fn request_approval(id: i32, peer_id: &str, name: &str, kind: &str) {
     #[cfg(windows)]
     {
-        imp::request_approval(id, peer_id, name);
+        imp::request_approval(id, peer_id, name, kind);
     }
     #[cfg(not(windows))]
     {
-        let _ = (peer_id, name);
+        let _ = (peer_id, name, kind);
         // 非 Windows 不交付组件；直接拒绝，避免连接悬挂
         log::warn!("[bridge] 非 Windows 平台无法展示确认卡，拒绝 id={id}");
         crate::ui_cm_interface::close(id);
@@ -109,6 +109,9 @@ mod imp {
 
     /// 当前连接的上行通道；断线时为 None，事件调用方无感跳过。
     static SENDER: Mutex<Option<tokio_mpsc::UnboundedSender<String>>> = Mutex::new(None);
+    /// writer 任务是否存活。仅靠 SENDER 是否为 Some 不够：writer 写失败退出后
+    /// SENDER 仍可能残留，事件会静默丢进无人消费的通道。
+    static SENDER_ALIVE: AtomicBool = AtomicBool::new(false);
     /// 待决策的审批请求：id → 决策通道
     static PENDING: OnceLock<Mutex<HashMap<i32, mpsc::Sender<bool>>>> = OnceLock::new();
     static STARTED: AtomicBool = AtomicBool::new(false);
@@ -135,15 +138,20 @@ mod imp {
     }
 
     pub fn send_event(kind: &str, data: Value) {
+        if !SENDER_ALIVE.load(Ordering::Relaxed) {
+            // writer 已退出、连接已半死：静默丢弃，避免把事件塞进无人消费的通道。
+            return;
+        }
         let sender = SENDER.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(tx) = sender {
             send_line(&tx, kind, None, data);
         }
     }
 
-    pub fn request_approval(id: i32, peer_id: &str, name: &str) {
+    pub fn request_approval(id: i32, peer_id: &str, name: &str, kind: &str) {
         let peer_id = peer_id.to_owned();
         let name = name.to_owned();
+        let kind = kind.to_owned();
         std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_millis(APPROVAL_TIMEOUT_MS);
             let expires_at_ms = now_ms() + APPROVAL_TIMEOUT_MS as i64;
@@ -166,6 +174,7 @@ mod imp {
                             "id": id,
                             "peer_id": peer_id,
                             "name": name,
+                            "kind": kind,
                             "expires_at_ms": expires_at_ms,
                         }),
                     );
@@ -214,8 +223,10 @@ mod imp {
     fn wait_for_sender(timeout: Duration) -> Option<tokio_mpsc::UnboundedSender<String>> {
         let deadline = Instant::now() + timeout;
         loop {
-            if let Some(tx) = SENDER.lock().unwrap_or_else(|e| e.into_inner()).clone() {
-                return Some(tx);
+            if SENDER_ALIVE.load(Ordering::Relaxed) {
+                if let Some(tx) = SENDER.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+                    return Some(tx);
+                }
             }
             if Instant::now() >= deadline {
                 return None;
@@ -382,6 +393,7 @@ mod imp {
         let (rd, wr) = tokio::io::split(pipe);
         let (tx, mut rx) = tokio_mpsc::unbounded_channel::<String>();
         *SENDER.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx.clone());
+        SENDER_ALIVE.store(true, Ordering::SeqCst);
 
         let writer = tokio::spawn(async move {
             let mut wr = wr;
@@ -393,6 +405,7 @@ mod imp {
                     break;
                 }
             }
+            SENDER_ALIVE.store(false, Ordering::SeqCst);
         });
 
         send_line(
@@ -404,6 +417,8 @@ mod imp {
                 "version": crate::VERSION,
                 "proto": PROTO,
                 "pid": std::process::id(),
+                // 未来宿主按会话路由多 CM 时需要；当前宿主忽略未知字段。
+                "session_id": crate::platform::windows::get_current_process_session_id().unwrap_or(0),
                 "id": hbb_common::config::Config::get_id(),
             }),
         );
@@ -451,7 +466,11 @@ mod imp {
             dispatch(&tx, role, &v);
         }
 
+        // 先清全局发送端并 drop 本地 tx，writer 的 rx 才会收到 None 并退出；
+        // 否则 writer.await 会一直等一个永远不会关闭的通道（宿主正常断开时卡死重连）。
+        SENDER_ALIVE.store(false, Ordering::SeqCst);
         *SENDER.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        drop(tx);
         let _ = writer.await;
         log::info!("[bridge] 与宿主断开 (role={})", role.key());
     }

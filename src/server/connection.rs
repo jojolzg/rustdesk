@@ -6517,6 +6517,7 @@ pub fn kill_remote_sessions() -> usize {
 
     let conns = AUTHED_CONNS.lock().unwrap();
     let mut killed = 0usize;
+    let mut force_close = Vec::new();
     for c in conns.iter() {
         // 只断画面/摄像头：文件传输、端口转发属于别的语义，各自管理生命周期
         if !matches!(c.conn_type, AuthConnType::Remote | AuthConnType::ViewCamera) {
@@ -6535,8 +6536,22 @@ pub fn kill_remote_sessions() -> usize {
         };
         if c.sender.send(Data::RawMessage(bytes)).is_ok() {
             killed += 1;
+            force_close.push(c.sender.clone());
         }
     }
+    drop(conns);
+
+    // stop_service 只是“请对端自己收尾”，恶意/异常客户端可以忽略。给 3 秒宽限，
+    // 仍未断开就由服务端主动发 Close，保证“一键断开”不会变成建议。
+    if !force_close.is_empty() {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            for sender in force_close {
+                let _ = sender.send(Data::Close);
+            }
+        });
+    }
+
     log::info!("[kill-sessions] 已向 {killed} 个远程会话下发断开指令");
     killed
 }

@@ -79,6 +79,15 @@ pub fn core_main() -> Option<Vec<String>> {
         }
         i += 1;
     }
+    // laztool：受控端组件。客户从开始菜单/任务栏点图标（无参数启动）时，不要再
+    // 弹出完整 RustDesk 主界面——那里能改永久密码/ID/服务器，还能发起外连。
+    // Flutter runner 在 core_main 返回 None 时会直接退出，所以这里拦住即可。
+    // 运维仍能用 `--connect <id>` 打开会话窗口；服务端/CM 都是带参启动，不受影响。
+    #[cfg(all(windows, not(debug_assertions)))]
+    if args.is_empty() && crate::platform::windows::is_cur_exe_the_installed() {
+        log::info!("[laztool] 忽略无参数启动：受控端组件不显示主界面");
+        return None;
+    }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     if args.is_empty() {
         #[cfg(target_os = "linux")]

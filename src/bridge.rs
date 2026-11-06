@@ -12,6 +12,8 @@
 //! 取代原先的「审批文件目录 + 300ms 轮询 + 会话状态文件」，实时性从秒级降到毫秒级，
 //! 且不再依赖文件系统做跨进程通信。
 
+#[cfg(not(windows))]
+use hbb_common::log;
 use serde_json::{json, Value};
 
 /// 管道名（宿主侧同名常量）。
@@ -84,6 +86,7 @@ mod imp {
     use std::sync::{mpsc, Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
+    use hbb_common::log;
     use hbb_common::tokio::{
         self,
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
